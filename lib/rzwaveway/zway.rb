@@ -1,5 +1,7 @@
 require 'singleton'
 
+require 'httpclient/webagent-cookie'
+require 'faraday-cookie_jar'
 require 'faraday'
 require 'log4r'
 require 'json'
@@ -35,8 +37,12 @@ module RZWaveWay
       port = options[:port] || 8083
       adapter_params = :httpclient if adapter_params.compact.empty?
       @base_uri="http://#{hostname}:#{port}"
-      @connection = Faraday.new {|faraday| faraday.adapter *adapter_params}
+      @connection = Faraday.new do |faraday|
+        faraday.use :cookie_jar
+        faraday.adapter(*adapter_params)
+      end
       @log = options[:logger] if options.has_key? :logger
+      login(options[:username], options[:password])
     end
 
     def start
@@ -105,6 +111,7 @@ module RZWaveWay
 
     def deliver_to_handlers events
       events.each do |event|
+        log.debug "Received event: #{event.class}"
         handler = @event_handlers[event.class]
         if handler
           handler.call(event)
@@ -152,7 +159,33 @@ module RZWaveWay
           results = JSON.parse response.body
           @update_time = results.delete('updateTime')
         else
-          log.error(response.reason)
+          log.error(response.status)
+          log.error(response.body)
+        end
+      rescue StandardError => e
+        log.error("Failed to communicate with ZWay HTTP server: #{e}")
+      end
+      results
+    end
+
+    def login(username = 'local', password = 'local')
+      results = {}
+      url = "#{@base_uri}/ZAutomation/api/v1/login"
+      begin
+        response = @connection.post do |req|
+          req.url url
+          req.headers['Content-Type'] = 'application/json'
+          req.headers['Accept'] = 'application/json'
+          req.body = '{ "form":"true","login":"' +
+                     username + '","password":"' + password +
+                     '","keepme":"false","default_ui":1 }'
+        end
+
+        if response.success?
+          results = JSON.parse response.body
+        else
+          log.error(response.status)
+          log.error(response.body)
         end
       rescue StandardError => e
         log.error("Failed to communicate with ZWay HTTP server: #{e}")

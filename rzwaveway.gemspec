@@ -4,8 +4,8 @@ require 'rzwaveway/version'
 Gem::Specification.new do |s|
   s.name = 'rzwaveway'
   s.version = RZWaveWay::VERSION
-  s.authors = ['Vincent Touchard']
-  s.date = %q{2014-02-18}
+  s.authors = ['Vincent Touchard','Adam Bewsher']
+  s.date = '2016-07-13'
   s.summary = 'ZWave API for ZWay'
   s.description = 'A Ruby API to use the Razberry ZWave ZWay interface'
   s.email = 'touchardv@yahoo.com'
@@ -16,6 +16,7 @@ Gem::Specification.new do |s|
   dependencies = [
     [:runtime, 'log4r', '~> 1.1.10'],
     [:runtime, 'faraday'],
+    [:runtime, 'faraday-cookie_jar'],
     [:runtime, 'httpclient'],
     [:development, 'bundler', '~> 1.0'],
     [:development, 'rspec', '~> 3.0.0']
