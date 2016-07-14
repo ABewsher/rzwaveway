@@ -34,8 +34,10 @@ module RZWaveWay
       updates_per_commandclass = group_per_commandclass updates
       updates_per_commandclass.each do |cc, values|
         if @command_classes.has_key? cc
-          event = @command_classes[cc].process(values)
-          events << event if event
+          new_events = @command_classes[cc].process(values)
+          new_events.each do |event|
+            events << event
+          end if new_events
         else
           log.warn "Could not find command class: '#{cc}'"
         end

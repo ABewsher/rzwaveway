@@ -15,6 +15,7 @@ Gem::Specification.new do |s|
 
   dependencies = [
     [:runtime, 'log4r', '~> 1.1.10'],
+    [:runtime, 'byebug'],
     [:runtime, 'faraday'],
     [:runtime, 'faraday-cookie_jar'],
     [:runtime, 'httpclient'],

@@ -33,11 +33,13 @@ module RZWaveWay
     attr_reader :device_id
     attr_reader :time
     attr_reader :level
+    attr_reader :human
 
-    def initialize(device_id, time, level)
+    def initialize(device_id, time, level, human = nil)
       @device_id = device_id
       @time = time
       @level = level
+      @human = human || level
     end
   end
 
@@ -66,8 +68,17 @@ module RZWaveWay
     attr_reader :time
   end
 
-  class TamperingEvent
+  class TamperEvent
     attr_reader :device_id
     attr_reader :time
+    attr_reader :value
+    attr_reader :human
+
+    def initialize(device_id, time, value, human = nil)
+      @device_id = device_id
+      @time = time
+      @value = value
+      @human = human || value
+    end
   end
 end
