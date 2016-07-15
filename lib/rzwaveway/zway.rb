@@ -79,6 +79,8 @@ module RZWaveWay
     RUN_BASE_PATH='/ZWaveAPI/Run/'
 
     def check_devices
+      return
+      # AB 15/7/2016 This method sometimes breaks on our system - we don't need it yet.
       @devices.values.each do |device|
         unless device.contacts_controller_periodically?
           current_time = Time.now.to_i
