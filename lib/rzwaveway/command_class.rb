@@ -30,7 +30,10 @@ module RZWaveWay
       parts = name.split '.'
       result = data
       parts.each do | part |
-        raise "Could not find part '#{part}' in '#{name}'" unless result.has_key? part
+        unless result.has_key? part
+          puts "Could not find part '#{part}' in '#{name}'"
+          return data
+        end
         result = result[part]
       end
       result

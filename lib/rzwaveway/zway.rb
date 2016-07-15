@@ -16,13 +16,16 @@ module RZWaveWay
 
     def initialize
       @log = default_logger
+      @event_handlers = {}
+      @devices = {}
+      $update_time = '0'
     end
 
     def execute(device_id, command_class, command_class_function, argument = nil)
-      raise "No device with id '#{device_id}'" unless @devices.has_key?(device_id)
+      raise "No device with id '#{device_id}'" unless @devices.key?(device_id)
       raise "Device with id '#{device_id}' does not support command class '#{command_class}'" unless @devices[device_id].support_commandclass?(command_class)
-      function_name = command_class_function.to_s
-      run_zway_function(device_id, command_class, function_name, argument)
+
+      run_zway "devices[#{device_id}].instances[0].commandClasses[#{command_class}].#{command_class_function.to_s}(#{argument})"
     end
 
     def find_extension(name, device_id)
@@ -41,69 +44,132 @@ module RZWaveWay
         faraday.use :cookie_jar
         faraday.adapter(*adapter_params)
       end
-      @log = options[:logger] if options.has_key? :logger
+      @log = options[:logger] if options.key? :logger
       login(options[:username], options[:password])
     end
 
-    def start
-      @devices = {}
-      @event_handlers = {}
-      @update_time = '0'
-      loop do
-        results = get_zway_data_tree_updates
-        if results.has_key?('devices')
-          results['devices'].each {|device_id,device_data_tree| create_device(device_id.to_i, device_data_tree)}
-          break
-        else
-          sleep 1.0
-          log.warn 'No devices found at start-up, retrying'
+    def start(poll_time = 0)
+      $poll_time = poll_time
+      @requested_poll_time = poll_time
+      results = get_zway_data_tree_updates
+
+      @controller = Controller.new(results['controller'], @devices) if results.key?('controller')
+
+      if results.key?('devices')
+        build_devices results['devices']
+      end
+
+      return if $poll_time == 0
+
+      log.debug "Starting polling every #{$poll_time} seconds."
+      @poller ||= Thread.new do
+        loop do
+          pt = $poll_time
+          $poll_time = @requested_poll_time unless @controller.state == 1
+          sleep pt
+          begin
+            process_events
+          rescue Exception => e
+            log.error e.message
+            log.error e.backtrace.inspect
+          end
         end
       end
+    end
+
+    def stop
+      @poller.kill if @poller
     end
 
     def on_event(event, &listener)
       @event_handlers[event] = listener
     end
 
+    def begin_add_device
+      run_zway 'controller.AddNodeToNetwork(1)'
+    end
+
+    def end_add_device
+      run_zway 'controller.AddNodeToNetwork(0)'
+    end
+
+    def begin_remove_device
+      run_zway 'controller.RemoveNodeFromNetwork(1)'
+    end
+
+    def end_remove_device
+      run_zway 'controller.RemoveNodeFromNetwork(0)'
+    end
+
     def process_events
       check_devices
       updates = get_zway_data_tree_updates
-      events = devices_process updates
-      check_not_alive_devices(events)
+      events = []
+
+      updates.each do | key, value |
+        if key == 'devices'
+          build_devices value
+        elsif key.start_with?('devices')
+          match_data = key.match(/\Adevices\.(\d+)\./)
+          if match_data
+            device_id = match_data[1].to_i
+            if device_id > 1
+              if  @devices[device_id]
+                device_events = @devices[device_id].process(match_data.post_match => value)
+                events += device_events unless device_events.empty?
+              else
+                log.warn "Could not find device with id '#{device_id}'"
+                log.debug("VALUE: #{value.inspect}")
+              end
+            end
+          else
+            log.debug "No device group match for key='#{key}'"
+            log.debug("VALUE: #{value.inspect}")
+          end
+        elsif key.start_with?('controller')
+          controller_events = @controller.process(key, value)
+          events += controller_events unless controller_events.empty?
+        else
+          log.debug "Unknown key type = '#{key}'"
+          log.debug("VALUE: #{value.inspect}")
+        end
+      end
+
+      check_not_alive_devices!(events)
       deliver_to_handlers(events)
     end
 
     private
 
-    DATA_TREE_BASE_PATH='/ZWaveAPI/Data/'
-    RUN_BASE_PATH='/ZWaveAPI/Run/'
+    def build_devices(data)
+      data.each do |device_id, device_data_tree|
+        id = device_id.to_i
+        if id > 1
+          log.debug "Tracking device #{id}."
+          @devices[id] = ZWaveDevice.new(id, device_data_tree) unless @devices.key?(id)
+        end
+      end
+    end
 
     def check_devices
       return
-      # AB 15/7/2016 This method sometimes breaks on our system - we don't need it yet.
+      # AB 15/7/2016 This method sometimes breaks when new devices are added.
+      # disabling it for now.
       @devices.values.each do |device|
         unless device.contacts_controller_periodically?
           current_time = Time.now.to_i
           # TODO ensure last_contact_time is set in the device initializer
           if (current_time % 10 == 0) && (current_time > device.next_contact_time - 60)
-            run_zway_no_operation device.id
+            run_zway "devices[#{device.id}].SendNoOperation()"
           end
         end
       end
     end
 
-    def check_not_alive_devices(events)
+    def check_not_alive_devices!(events)
       @devices.values.each do |device|
         event = device.process_alive_check
         events << event if event
-      end
-    end
-
-    def create_device(device_id, device_data_tree)
-      if device_id > 1
-        device = ZWaveDevice.new(device_id, device_data_tree)
-        device.contact_frequency = 300 unless device.contacts_controller_periodically?
-        @devices[device_id] = device
       end
     end
 
@@ -113,86 +179,24 @@ module RZWaveWay
 
     def deliver_to_handlers events
       events.each do |event|
-        log.debug "Received event: #{event.class}"
         handler = @event_handlers[event.class]
         if handler
           handler.call(event)
         else
-          log.warn "No event handler for #{event.class}"
+          log.debug "No event handler for #{event.class}"
         end
       end
-    end
-
-    def devices_process updates
-      events = []
-      updates_per_device = group_per_device updates
-      updates_per_device.each do | id, updates |
-        if @devices[id]
-          device_events = @devices[id].process updates
-          events += device_events unless device_events.empty?
-        else
-          log.warn "Could not find device with id '#{id}'"
-        end
-      end
-      events
-    end
-
-    def group_per_device updates
-      updates_per_device = {}
-      updates.each do | key, value |
-        match_data = key.match(/\Adevices\.(\d+)\./)
-        if match_data
-          device_id = match_data[1].to_i
-          updates_per_device[device_id] = {} unless(updates_per_device.has_key?(device_id))
-          updates_per_device[device_id][match_data.post_match] = value
-        else
-          log.debug "No device group match for key='#{key}'"
-        end
-      end
-      updates_per_device
     end
 
     def get_zway_data_tree_updates
-      results = {}
-      url = @base_uri + DATA_TREE_BASE_PATH + "#{@update_time}"
-      begin
-        response = @connection.get(url)
-        if response.success?
-          results = JSON.parse response.body
-          @update_time = results.delete('updateTime')
-        else
-          log.error(response.status)
-          log.error(response.body)
-        end
-      rescue StandardError => e
-        log.error("Failed to communicate with ZWay HTTP server: #{e}")
-      end
+      results = api_post "/ZWaveAPI/Data/#{$update_time}"
+      $update_time = results.delete('updateTime') unless results.empty?
       results
     end
 
     def login(username = 'local', password = 'local')
-      results = {}
-      url = "#{@base_uri}/ZAutomation/api/v1/login"
-      begin
-        response = @connection.post do |req|
-          req.url url
-          req.headers['Content-Type'] = 'application/json'
-          req.headers['Accept'] = 'application/json'
-          req.body = '{ "form":"true","login":"' +
-                     username + '","password":"' + password +
-                     '","keepme":"false","default_ui":1 }'
-        end
-
-        if response.success?
-          results = JSON.parse response.body
-        else
-          log.error(response.status)
-          log.error(response.body)
-        end
-      rescue StandardError => e
-        log.error("Failed to communicate with ZWay HTTP server: #{e}")
-      end
-      results
+      api_post '/ZAutomation/api/v1/login',
+               %Q({ "form":"true","login":"#{username}","password":"#{password}","keepme":"false","default_ui":1 })
     end
 
     def qualified_const_get(str)
@@ -215,32 +219,31 @@ module RZWaveWay
       path.inject(Object) { |ns,name| ns.const_get(name) }
     end
 
-    def run_zway_function(device_id, command_class, function_name, argument)
-      command_path = "devices[#{device_id}].instances[0].commandClasses[#{command_class}]."
-      if argument
-        command_path += "#{function_name}(#{argument})"
-      else
-        command_path += "#{function_name}()"
-      end
-      run_zway command_path
+    def run_zway(command_path)
+      api_post '/ZWaveAPI/Run/' + command_path
     end
 
-    def run_zway_no_operation device_id
-      run_zway "devices[#{device_id}].SendNoOperation()"
-    end
-
-    def run_zway command_path
+    def api_post(path, body = '{}')
+      results = {}
+      url = URI.encode(@base_uri + path, '[]')
       begin
-        uri = URI.encode(@base_uri + RUN_BASE_PATH + command_path, '[]')
-        response = @connection.get(uri)
-        unless response.success?
+        response = @connection.post do |req|
+          req.url url
+          req.headers['Content-Type'] = 'application/json'
+          req.headers['Accept'] = 'application/json'
+          req.body = body
+        end
+        if response.success?
+          results = JSON.parse response.body
+        else
           log.error(response.status)
           log.error(response.body)
         end
       rescue StandardError => e
         log.error("Failed to communicate with ZWay HTTP server: #{e}")
-        log.error(e.backtrace)
+        byebug
       end
+      results
     end
   end
 end

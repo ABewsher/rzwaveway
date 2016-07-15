@@ -6,15 +6,32 @@ module RZWaveWay
     include CommandClasses
     include Logger
 
+    attr_reader :device_type
     attr_reader :name
     attr_reader :id
     attr_reader :last_contact_time
     attr_accessor :contact_frequency
+    attr_reader :command_classes
 
     def initialize(id, data)
       @id = id
-      initialize_from data
+      @name = find('data.givenName.value', data)
+      last_contact_times = [
+        find('data.lastReceived.updateTime', data),
+        find('data.lastSend.updateTime', data)
+      ]
+      @last_contact_time = last_contact_times.max
+
+      @dead = false
+      @missed_contact_count = 0
+      @contact_frequency = 0
+      @properties = {}
+      @command_classes = create_commandclasses_from data
+      @device_type = RZWaveWay::ZWaveDeviceType.new(data, @command_classes)
+
+      contact_frequency = 300 unless contacts_controller_periodically?
       log.info "Created ZWaveDevice with name='#{name}' (id='#{id}')"
+      # log.debug "Created from #{data.inspect}"
     end
 
     def contacts_controller_periodically?
@@ -33,13 +50,14 @@ module RZWaveWay
       events = []
       updates_per_commandclass = group_per_commandclass updates
       updates_per_commandclass.each do |cc, values|
+        events << CommandClassEvent.new(id, cc, values)
         if @command_classes.has_key? cc
           new_events = @command_classes[cc].process(values)
           new_events.each do |event|
             events << event
           end if new_events
         else
-          log.warn "Could not find command class: '#{cc}'"
+          log.debug "Could not find command class: '#{cc}'"
         end
       end
       process_device_data(updates, events)
@@ -114,21 +132,6 @@ module RZWaveWay
         (class << self; self end).send(:define_method, cc_class_name) { cc_class } unless cc_class_name == 'Dummy'
       end
       cc_classes
-    end
-
-    def initialize_from data
-      @name = find('data.givenName.value', data)
-      last_contact_times = [
-        find('data.lastReceived.updateTime', data),
-        find('data.lastSend.updateTime', data)
-      ]
-      @last_contact_time = last_contact_times.max
-
-      @dead = false
-      @missed_contact_count = 0
-      @contact_frequency = 0
-      @properties = {}
-      @command_classes = create_commandclasses_from data
     end
 
     def group_per_commandclass updates

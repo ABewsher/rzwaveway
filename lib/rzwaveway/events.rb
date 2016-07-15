@@ -1,3 +1,5 @@
+require 'json'
+
 module RZWaveWay
   class AliveEvent
     attr_reader :device_id
@@ -21,6 +23,28 @@ module RZWaveWay
     end
   end
 
+  class ControllerStateEvent
+    attr_reader :state
+    attr_reader :human
+
+    def initialize(value, human)
+      @state = value
+      @human = human
+    end
+  end
+
+  class CommandClassEvent
+    attr_reader :device_id
+    attr_reader :cc_id
+    attr_reader :data
+
+    def initialize(device_id, cc_id, data)
+      @device_id = device_id
+      @cc_id = cc_id
+      @data = data.to_json
+    end
+  end
+
   class DeadEvent
     attr_reader :device_id
 
@@ -29,14 +53,28 @@ module RZWaveWay
     end
   end
 
+  class LastIncludedDeviceEvent
+    attr_reader :device_id
+    attr_reader :device_type
+    attr_reader :data
+
+    def initialize(device_id, device_type = nil, data = nil)
+      @device_id = device_id
+      @device_type = device_type
+      @data = data
+    end
+  end
+
   class LevelEvent
     attr_reader :device_id
+    attr_reader :device_name
     attr_reader :time
     attr_reader :level
     attr_reader :human
 
-    def initialize(device_id, time, level, human = nil)
+    def initialize(device_id, device_name, time, level, human = nil)
       @device_id = device_id
+      @device_name = device_name
       @time = time
       @level = level
       @human = human || level
@@ -79,6 +117,16 @@ module RZWaveWay
       @time = time
       @value = value
       @human = human || value
+    end
+  end
+
+  class UnknownEvent
+    attr_reader :event_name
+    attr_reader :data
+
+    def initialize(name, data)
+      @event_name = name
+      @data = data
     end
   end
 end

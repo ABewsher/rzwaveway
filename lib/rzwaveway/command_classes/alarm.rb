@@ -26,7 +26,7 @@ module RZWaveWay
             value = access_control_value_from(human)
             update_time = event['updateTime']
             if @device.update_property(:access_control, value, update_time)
-              events << LevelEvent.new(@device.id, update_time, value, human)
+              events << LevelEvent.new(@device.id, @device.name, update_time, value, human)
             end
           end
         end
